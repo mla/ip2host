@@ -1,0 +1,317 @@
+#!/usr/bin/perl -w
+
+# ip2host - Resolve IPs to hostnames in web server logs
+# Maurice Aubrey <maurice.aubrey+ip2host@gmail.com>
+#
+# Usage: ip2host [OPTIONS] [cache_file] < infile > outfile
+#
+# For a usage summary, run: ip2host --usage
+# For documentation, run: perldoc ip2host
+
+# $Id: ip2host 24 2007-01-27 05:33:06Z mla $
+
+our $CHILDREN = 40;        # Number of processes to fork
+our $TIMEOUT  = 20;        # DNS timeout
+our $BUFFER   = 50000;     # Maximum number of log lines to keep in memory
+our $FLUSH    = 500;       # Flush output buffer every $FLUSH lines
+our $CACHE    = '';        # Optional disk cache file to use
+our $TTL      = 86400 * 7; # Seconds until disk cached ips are expired
+our $DEBUG    = 0;
+# Regular expression for matching an IP address
+# $1 should be the IP
+# If IP is always in first column then this would also work:
+# q/^([\d.]+)/s;
+our $REGEX    = '\b (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) \b';
+
+use strict;
+use vars qw( %Opt %Buffer %Pending %Cache $Output_Line $Input_Line );
+use Socket;
+use IO::Handle;
+use IO::Select;
+use Getopt::Long;
+
+our $VERSION = '1.10';
+
+BEGIN {
+  package IP_Cache;
+
+  use strict;
+
+  our $TTL;
+  our @ISA = qw/ DB_File /;
+
+  sub TIEHASH {
+    my $class = shift;
+    $TTL      = shift;
+
+    require DB_File;
+    $class->SUPER::TIEHASH(@_);
+  }
+
+  # In order to implement EXISTS, we'd need to parse
+  # the value to see if the IP has expired, which is just
+  # as expensive as FETCH.  So we'll just make sure we
+  # never use it.
+  sub EXISTS { die 'exists not implemented!' }
+
+  sub _DB_FETCH {
+    my $self = shift;
+    my $ip   = shift;
+
+    my $val = $self->SUPER::FETCH($ip) or return;
+
+    my($utc, $host) = split /:/, $val, 2;
+    time - $utc < $TTL or return;
+
+    return $host;
+  }
+
+  {
+    my %cache; 
+
+    sub FETCH {
+      my $self = shift;
+      my $ip   = shift;
+
+      return $cache{ $ip } if exists $cache{ $ip };
+      return $cache{ $ip } = $self->_DB_FETCH($ip);
+    }
+
+    sub STORE {
+      my $self = shift;
+      my($ip, $host) = @_;
+
+      $cache{ $ip } = $host;
+      $self->SUPER::STORE( $ip => (time . ':' . $host) );
+    }
+  }
+}
+
+sub usage {
+  my $exit = shift || 0;
+
+  print STDERR <<EOF;
+$0 version $VERSION
+
+Usage: $0 [OPTIONS] [cache_file] < input_log > output_log
+
+See the POD for more details: perldoc $0
+
+Copyright 1999-2007, Maurice Aubrey <maurice\@hevanet.com>
+
+This module is free software; you may redistribute it and/or
+modify it under the same terms as Perl itself.      
+EOF
+
+  exit $exit;
+}
+
+sub resolve_ips($) {
+  my $parent_fh = shift;
+
+  $SIG{'ALRM'} = sub { die 'alarmed' };
+
+  while(my $ip = <$parent_fh>) { # Get IP to resolve
+    chomp($ip);
+    my $host = undef;
+    eval { # Try to resolve, but give up after $TIMEOUT seconds
+      alarm($Opt{timeout});
+      my $ip_struct = inet_aton $ip;
+      $host = gethostbyaddr $ip_struct, AF_INET;
+      alarm(0);
+    };
+    # XXX Debug
+    if ($Opt{debug} and $@ =~ /alarmed/) {
+      $host ||= 'TIMEOUT';
+      # warn "Alarming ($ip)...\n";
+    }
+    $host ||= $ip;
+    print $parent_fh "$ip $host\n";
+  }
+}
+
+sub fork_children($) {
+  my $num_children = shift;
+
+  my $read_set  = IO::Select->new;
+  my $write_set = IO::Select->new;
+
+  for(my $child = 1; $child <= $num_children; $child++) {
+    my($child_fh, $parent_fh) = (IO::Handle->new, IO::Handle->new);
+    socketpair($child_fh, $parent_fh, AF_UNIX, SOCK_STREAM, PF_UNSPEC)
+      or die "socketpair failed: $!";
+    $child_fh->autoflush;
+    $parent_fh->autoflush;
+
+    if (my $pid = fork) { # parent
+      close $parent_fh;
+      $write_set->add($child_fh); # Start out writing to children 
+    } else { # child
+      defined $pid or die "fork failed: $!";
+      close $child_fh; close STDIN; close STDOUT;
+      resolve_ips($parent_fh);
+      exit 0; 
+    } 
+  }
+
+  return ($read_set, $write_set);
+}
+
+# Write as many lines as we can until we come across one
+# that's missing (that means it's still pending DNS).
+sub flush_output {
+  for (; exists $Buffer{ $Output_Line }; $Output_Line++) {
+    print delete $Buffer{ $Output_Line };
+  }
+}
+
+%Opt = (
+  children => $CHILDREN,
+  timeout  => $TIMEOUT,
+  buffer   => $BUFFER,
+  flush    => $FLUSH,
+  cache    => $CACHE,
+  ttl      => $TTL,
+  debug    => $DEBUG,
+  regex    => $REGEX,
+);
+GetOptions(\%Opt,
+  "children|kids=i",
+  "timeout=i",
+  "buffer=i",
+  "flush=i",
+  "ttl=i",
+  "cache=s",
+  "usage|help|version",
+  "debug",
+  "regex=s",
+);
+usage(0) if $Opt{usage};
+usage(1) if @ARGV > 1;
+$Opt{cache} = shift if @ARGV;
+$Opt{regex} = qr/$Opt{regex}/sx;
+
+my($read_set, $write_set) = fork_children($Opt{children}); 
+
+if ($Opt{cache}) { # Cache results to disk if asked
+  tie %Cache, 'IP_Cache', $Opt{ttl}, $Opt{cache}
+    or die "unable to tie '$Opt{cache}': $!";
+}
+
+$Output_Line = 1;
+$Input_Line = 0;
+while (1) {
+  my $buffer_full = $Input_Line - $Output_Line >= $Opt{buffer};
+
+  my($readable, $writable) = IO::Select->select(
+    $read_set,
+    $buffer_full ? undef : $write_set, # Throttle if buffer is full
+    undef
+  );
+
+  while (@$writable) { # One or more children ready for IP
+    my $line = <STDIN>;
+    $Input_Line++;
+    unless (defined $line) {
+      undef $write_set;
+      last;
+    }
+    my($ip) = ($line =~ /$Opt{regex}/);
+    my($before, $after) = ($`, $');
+    if (not defined $ip) { # No IP seen, pass it through unmolested
+      $Buffer{ $Input_Line } = $line;
+    } elsif (my $host = $Cache{ $ip }) { # We found this answer already
+      $Buffer{ $Input_Line } = "$before$host$after";
+    } elsif (exists $Pending{ $ip }) { # We're still looking
+      push @{ $Pending{ $ip } }, [ $Input_Line, $before, $after ];
+    } else { # Send IP to child
+      my $fh = shift @$writable;
+      print $fh "$ip\n";
+      $Pending{ $ip } = [ [ $Input_Line, $before, $after ] ];
+      $write_set->remove($fh);
+      $read_set->add($fh); # Move to read set to wait for answer
+    }
+
+    flush_output if $Input_Line % $Opt{flush} == 0;
+  }
+
+  while (@$readable) {  # One or more children have an answer
+    my $fh = shift @$readable;
+    chomp(my $str = <$fh>);
+    my($ip, $host) = split / /, $str, 2;
+    $Cache{ $ip } = $host; 
+    # Take all the lines that were pending for this IP and
+    # toss them into the output buffer
+    foreach my $pending (@{ $Pending{ $ip } }) {
+      $Buffer{ $pending->[0] } = "$pending->[1]$host$pending->[2]";
+    }
+    delete $Pending{ $ip };
+    $read_set->remove($fh);
+    $write_set->add($fh) if defined $write_set; # Ready for new question
+  }
+
+  last if not defined $write_set and not keys %Pending;
+  flush_output if $buffer_full;
+}
+
+flush_output;
+exit 0;
+
+=pod
+
+=head1 NAME
+
+  ip2host - Resolves IPs to hostnames in web server logs
+
+=head1 SYNOPSIS
+
+  ip2host [OPTIONS] [cache_file] < infile > outfile
+
+  infile  - Web server log file.
+
+  outfile - Same as input file, but with IPs resolved to hostnames.        
+
+  Options:
+
+  --children=...  Number of child processes to spawn (default: 40)
+  --timeout=...   Seconds to wait on DNS response (default: 20)
+  --buffer=...    Maximum number of log lines to keep in
+                  memory (default: 50000)
+  --flush=...     Number of lines to process before flushing
+                  output buffer (default: 500)
+  --cache=...     Filename to use as disk cache (default: none)
+  --ttl=...       Number of seconds before IPs cached on disk are expired
+                  (default: 604800 - One week)
+
+=head1 DESCRIPTION
+
+This is a faster, drop-in replacement for the logresolve
+utility distributed with the Apache web server.
+
+It's been reported to work under Linux, FreeBSD, Solaris,
+Tru64, and IRIX.  
+
+=head1 AUTHOR 
+
+Maurice Aubrey E<lt>maurice.aubrey+ip2host@gmail.comE<gt>
+
+Based on the logresolve.pl script by Rob Hartill.
+
+=head1 COPYRIGHT
+
+Copyright 1999-2007, Maurice Aubrey E<lt>maurice.aubrey+ip2host@gmail.comE<gt>.
+
+This module is free software; you may redistribute it and/or
+modify it under the same terms as Perl itself.
+
+=head1 README
+
+Resolves IPs to hostnames in web server logs.
+This is a faster, drop-in replacement for the logresolve utility
+distributed with the Apache web server.
+
+=head1 SCRIPT CATEGORIES
+
+Web        
+
+=cut

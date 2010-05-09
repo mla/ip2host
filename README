@@ -1,0 +1,47 @@
+NAME
+      ip2host - Resolves IPs to hostnames in web server logs
+
+SYNOPSIS
+      ip2host [OPTIONS] [cache_file] < infile > outfile
+
+      infile  - Web server log file.
+
+      outfile - Same as input file, but with IPs resolved to hostnames.        
+
+      Options:
+
+      --children=...  Number of child processes to spawn (default: 40)
+      --timeout=...   Seconds to wait on DNS response (default: 20)
+      --buffer=...    Maximum number of log lines to keep in
+                      memory (default: 50000)
+      --flush=...     Number of lines to process before flushing
+                      output buffer (default: 500)
+      --cache=...     Filename to use as disk cache (default: none)
+      --ttl=...       Number of seconds before IPs cached on disk are expired
+                      (default: 604800 - One week)
+
+DESCRIPTION
+    This is a faster, drop-in replacement for the logresolve utility
+    distributed with the Apache web server.
+
+    It's been reported to work under Linux, FreeBSD, Solaris, Tru64, and
+    IRIX.
+
+AUTHOR
+    Maurice Aubrey <maurice.aubrey+ip2host@gmail.com>
+
+    Based on the logresolve.pl script by Rob Hartill.
+
+COPYRIGHT
+    Copyright 1999-2010, Maurice Aubrey <maurice.aubrey+ip2host@gmail.com>.
+
+    This module is free software; you may redistribute it and/or modify it
+    under the same terms as Perl itself.
+
+README
+    Resolves IPs to hostnames in web server logs. This is a faster, drop-in
+    replacement for the logresolve utility distributed with the Apache web
+    server.
+
+SCRIPT CATEGORIES
+    Web

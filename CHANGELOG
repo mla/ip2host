@@ -1,0 +1,9 @@
+ip2host 1.11
+
+  * Silence warnings thanks to Andrew McNaughton and Gunnar Wolf
+    http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=563129
+
+ip2host 1.10
+  
+  * Moved repository to Github
+    http://github.com/mla/ip2host

@@ -8,6 +8,8 @@
 # For a usage summary, run: ip2host --usage
 # For documentation, run: perldoc ip2host
 
+# $Id: ip2host 24 2007-01-27 05:33:06Z mla $
+
 our $CHILDREN = 40;        # Number of processes to fork
 our $TIMEOUT  = 20;        # DNS timeout
 our $BUFFER   = 50000;     # Maximum number of log lines to keep in memory
@@ -15,11 +17,11 @@ our $FLUSH    = 500;       # Flush output buffer every $FLUSH lines
 our $CACHE    = '';        # Optional disk cache file to use
 our $TTL      = 86400 * 7; # Seconds until disk cached ips are expired
 our $DEBUG    = 0;
-# Regular expression for matching an IP address
+# Regular expression for matching either an IPv4 or an IPv6 address
 # $1 should be the IP
-# If IP is always in first column then this would also work:
-# q/^([\d.]+)/s;
-our $REGEX    = '\b (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) \b';
+# IPv6 regex from http://people.spodhuis.org/phil.pennock/software/emit_ipv6_regexp-0.304
+# Just added the IPv4 bit at the beginning.
+our $REGEX = '\b (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|(?^x:(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){6})(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:::(?:(?^:(?:[0-9a-fA-F]{1,4})):){5})(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})))?::(?:(?^:(?:[0-9a-fA-F]{1,4})):){4})(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,1}(?^:(?:[0-9a-fA-F]{1,4})))?::(?:(?^:(?:[0-9a-fA-F]{1,4})):){3})(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,2}(?^:(?:[0-9a-fA-F]{1,4})))?::(?:(?^:(?:[0-9a-fA-F]{1,4})):){2})(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,3}(?^:(?:[0-9a-fA-F]{1,4})))?::(?^:(?:[0-9a-fA-F]{1,4})):)(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,4}(?^:(?:[0-9a-fA-F]{1,4})))?::)(?^:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):(?^:(?:[0-9a-fA-F]{1,4})))|(?^:(?:(?:(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\.){3}(?^:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,5}(?^:(?:[0-9a-fA-F]{1,4})))?::)(?^:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?^:(?:[0-9a-fA-F]{1,4})):){0,6}(?^:(?:[0-9a-fA-F]{1,4})))?::))))) \b';
 
 use strict;
 use vars qw( %Opt %Buffer %Pending %Cache $Output_Line $Input_Line );
@@ -28,7 +30,7 @@ use IO::Handle;
 use IO::Select;
 use Getopt::Long;
 
-our $VERSION = '1.11';
+our $VERSION = '1.10';
 
 BEGIN {
   package IP_Cache;
@@ -113,9 +115,12 @@ sub resolve_ips($) {
     chomp($ip);
     my $host = undef;
     eval { # Try to resolve, but give up after $TIMEOUT seconds
+      my ($ip_struct);
       alarm($Opt{timeout});
-      if (my $ip_struct = inet_aton $ip) {
+      if ($ip_struct = inet_aton($ip)) {
 	  $host = gethostbyaddr $ip_struct, AF_INET;
+      } elsif ($ip_struct = Socket::inet_pton(AF_INET6, $ip)) {
+	  $host = gethostbyaddr $ip_struct, AF_INET6;
       }
       alarm(0);
     };
@@ -298,7 +303,7 @@ Based on the logresolve.pl script by Rob Hartill.
 
 =head1 COPYRIGHT
 
-Copyright 1999-2010, Maurice Aubrey E<lt>maurice.aubrey+ip2host@gmail.comE<gt>.
+Copyright 1999-2007, Maurice Aubrey E<lt>maurice.aubrey+ip2host@gmail.comE<gt>.
 
 This module is free software; you may redistribute it and/or
 modify it under the same terms as Perl itself.

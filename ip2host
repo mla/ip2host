@@ -8,8 +8,6 @@
 # For a usage summary, run: ip2host --usage
 # For documentation, run: perldoc ip2host
 
-# $Id: ip2host 24 2007-01-27 05:33:06Z mla $
-
 our $CHILDREN = 40;        # Number of processes to fork
 our $TIMEOUT  = 20;        # DNS timeout
 our $BUFFER   = 50000;     # Maximum number of log lines to keep in memory
@@ -30,7 +28,7 @@ use IO::Handle;
 use IO::Select;
 use Getopt::Long;
 
-our $VERSION = '1.10';
+our $VERSION = '1.12';
 
 BEGIN {
   package IP_Cache;
@@ -115,13 +113,15 @@ sub resolve_ips($) {
     chomp($ip);
     my $host = undef;
     eval { # Try to resolve, but give up after $TIMEOUT seconds
-      my ($ip_struct);
       alarm($Opt{timeout});
+
+      my $ip_struct;
       if ($ip_struct = inet_aton($ip)) {
-	  $host = gethostbyaddr $ip_struct, AF_INET;
+        $host = gethostbyaddr $ip_struct, AF_INET;
       } elsif ($ip_struct = Socket::inet_pton(AF_INET6, $ip)) {
-	  $host = gethostbyaddr $ip_struct, AF_INET6;
+        $host = gethostbyaddr $ip_struct, AF_INET6;
       }
+
       alarm(0);
     };
     # XXX Debug

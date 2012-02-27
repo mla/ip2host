@@ -1,3 +1,8 @@
+ip2host 1.12
+
+  * IPv6 support thanks to Gunnar Wolf
+    https://github.com/gwolf/ip2host
+
 ip2host 1.11
 
   * Silence warnings thanks to Andrew McNaughton and Gunnar Wolf

@@ -95,7 +95,7 @@ Usage: $0 [OPTIONS] [cache_file] < input_log > output_log
 
 See the POD for more details: perldoc $0
 
-Copyright 1999-2012, Maurice Aubrey <maurice\@hevanet.com>
+Copyright 1999-2012, Maurice Aubrey <maurice.aubrey+ip2host\@gmail.com>
 
 This module is free software; you may redistribute it and/or
 modify it under the same terms as Perl itself.      
